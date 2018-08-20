@@ -87,6 +87,10 @@ var (
 )
 
 func newTestRoute(numHops int) ([]*Router, *[]HopData, *OnionPacket, error) {
+	return newTestRouteWithAddionalData(numHops, nil)
+}
+
+func newTestRouteWithAddionalData(numHops int, data []byte) ([]*Router, *[]HopData, *OnionPacket, error) {
 	nodes := make([]*Router, numHops)
 
 	// Create numHops random sphinx nodes.
@@ -122,7 +126,7 @@ func newTestRoute(numHops int) ([]*Router, *[]HopData, *OnionPacket, error) {
 	// generated intermdiates nodes above.  Destination should be Hash160,
 	// adding padding so parsing still works.
 	sessionKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bytes.Repeat([]byte{'A'}, 32))
-	fwdMsg, err := NewOnionPacket(route, sessionKey, hopsData, nil)
+	fwdMsg, err := NewOnionPacket(route, sessionKey, hopsData, nil, data)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("Unable to create forwarding "+
 			"message: %#v", err)
@@ -162,7 +166,7 @@ func TestBolt4Packet(t *testing.T) {
 	}
 
 	sessionKey, _ := btcec.PrivKeyFromBytes(btcec.S256(), bolt4SessionKey)
-	pkt, err := NewOnionPacket(route, sessionKey, hopsData, bolt4AssocData)
+	pkt, err := NewOnionPacket(route, sessionKey, hopsData, bolt4AssocData, nil)
 	if err != nil {
 		t.Fatalf("unable to construct onion packet: %v", err)
 	}
@@ -216,6 +220,75 @@ func TestSphinxCorrectness(t *testing.T) {
 			if onionPacket.Action != ExitNode {
 				t.Fatalf("Processing error, node %v is the last hop in "+
 					"the path, yet it doesn't recognize so", i)
+			}
+
+		} else {
+			// If this isn't the last node in the path, then the
+			// returned action should indicate that there are more
+			// hops to go.
+			if onionPacket.Action != MoreHops {
+				t.Fatalf("Processing error, node %v is not the final"+
+					" hop, yet thinks it is.", i)
+			}
+
+			// The next hop should have been parsed as node[i+1].
+			parsedNextHop := onionPacket.ForwardingInstructions.NextAddress[:]
+			expected := bytes.Repeat([]byte{byte(i)}, addressSize)
+			if !bytes.Equal(parsedNextHop, expected) {
+				t.Fatalf("Processing error, next hop parsed incorrectly."+
+					" next hop should be %v, was instead parsed as %v",
+					hex.EncodeToString(nodes[i+1].nodeID[:]),
+					hex.EncodeToString(parsedNextHop))
+			}
+
+			fwdMsg = onionPacket.NextPacket
+		}
+	}
+}
+
+func TestSphinxCorrectnessWithAdditionalData(t *testing.T) {
+	additionalData := []byte("some additional data")
+	nodes, hopDatas, fwdMsg, err := newTestRouteWithAddionalData(19, additionalData)
+	if err != nil {
+		t.Fatalf("unable to create random onion packet: %v", err)
+	}
+
+	// Now simulate the message propagating through the mix net eventually
+	// reaching the final destination.
+	for i := 0; i < len(nodes); i++ {
+		// Start each node's ReplayLog and defer shutdown
+		nodes[i].log.Start()
+		defer nodes[i].log.Stop()
+
+		hop := nodes[i]
+
+		t.Logf("Processing at hop: %v \n", i)
+		onionPacket, err := hop.ProcessOnionPacket(fwdMsg, nil, uint32(i)+1)
+		if err != nil {
+			t.Fatalf("Node %v was unable to process the "+
+				"forwarding message: %v", i, err)
+		}
+
+		// The hop data for this hop should *exactly* match what was
+		// initially used to construct the packet.
+		expectedHopData := (*hopDatas)[i]
+		if !reflect.DeepEqual(onionPacket.ForwardingInstructions, expectedHopData) {
+			t.Fatalf("hop data doesn't match: expected %v, got %v",
+				spew.Sdump(expectedHopData),
+				spew.Sdump(onionPacket.ForwardingInstructions))
+		}
+
+		// If this is the last hop on the path, the node should
+		// recognize that it's the exit node.
+		if i == len(nodes)-1 {
+			if onionPacket.Action != ExitNode {
+				t.Fatalf("Processing error, node %v is the last hop in "+
+					"the path, yet it doesn't recognize so", i)
+			}
+			decodedAddtionalData := onionPacket.NextPacket.RoutingInfo[:len(additionalData)]
+			if !bytes.Equal(decodedAddtionalData, additionalData) {
+				t.Fatalf("incorrect additional data. Got: %v, want: %v",
+					decodedAddtionalData, additionalData)
 			}
 
 		} else {

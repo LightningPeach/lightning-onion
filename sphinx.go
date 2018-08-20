@@ -278,8 +278,11 @@ func generateSharedSecrets(paymentPath []*btcec.PublicKey,
 // NewOnionPacket creates a new onion packet which is capable of
 // obliviously routing a message through the mix-net path outline by
 // 'paymentPath'.
+// additional will be used instead of 0 when creating packet
+// last hop can use this data. len(paymentPath) * 65 is used for route, so
+// maximum size of addionalData(which is not trimmed) is 1300 - len(paymentPath) * 65
 func NewOnionPacket(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey,
-	hopsData []HopData, assocData []byte) (*OnionPacket, error) {
+	hopsData []HopData, assocData []byte, additionalData []byte) (*OnionPacket, error) {
 
 	numHops := len(paymentPath)
 	hopSharedSecrets := generateSharedSecrets(paymentPath, sessionKey)
@@ -295,6 +298,8 @@ func NewOnionPacket(paymentPath []*btcec.PublicKey, sessionKey *btcec.PrivateKey
 		nextHmac   [hmacSize]byte
 		hopDataBuf bytes.Buffer
 	)
+
+	copy(mixHeader[:], additionalData)
 
 	// Now we compute the routing information for each hop, along with a
 	// MAC of the routing info using the shared key for that hop.

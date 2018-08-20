@@ -44,7 +44,7 @@ func BenchmarkPathPacketConstruction(b *testing.B) {
 	b.StartTimer()
 
 	for i := 0; i < b.N; i++ {
-		sphinxPacket, err = NewOnionPacket(route, d, hopsData, nil)
+		sphinxPacket, err = NewOnionPacket(route, d, hopsData, nil, nil)
 		if err != nil {
 			b.Fatalf("unable to create packet: %v", err)
 		}
